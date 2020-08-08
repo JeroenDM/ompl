@@ -114,73 +114,81 @@ void ompl::base::ConstrainedStateSpace::constrainedSanityChecks(unsigned int fla
     State *s2 = allocState();
     StateSamplerPtr ss = allocStateSampler();
 
-    bool isTraversable = false;
-
-    for (unsigned int i = 0; i < ompl::magic::TEST_STATE_COUNT; ++i)
+    // Wrapped in try block so we can free the states before rethrowing the exception
+    try
     {
-        bool satisfyGeodesics = false;
-        bool continuityGeodesics = false;
+        bool isTraversable = false;
 
-        ss->sampleUniform(s1);
-
-        // Verify that the provided Jacobian routine for the constraint is close
-        // to the numerical approximation.
-        if (flags & CONSTRAINED_STATESPACE_JACOBIAN)
+        for (unsigned int i = 0; i < ompl::magic::TEST_STATE_COUNT; ++i)
         {
-            Eigen::MatrixXd j_a(n_ - k_, n_), j_n(n_ - k_, n_);
+            bool satisfyGeodesics = false;
+            bool continuityGeodesics = false;
 
-            constraint_->jacobian(*s1, j_a);              // Provided routine
-            constraint_->Constraint::jacobian(*s1, j_n);  // Numerical approximation
+            ss->sampleUniform(s1);
 
-            if ((j_a - j_n).norm() > constraint_->getTolerance())
-                throw Exception("Constraint Jacobian deviates from numerical approximation.");
-        }
-
-        ss->sampleUniformNear(s2, s1, 10 * delta_);
-
-        // Check that samplers are returning constraint satisfying samples.
-        if (flags & CONSTRAINED_STATESPACE_SAMPLERS && (!constraint_->isSatisfied(s1) || !constraint_->isSatisfied(s2)))
-            throw Exception("State samplers generate constraint unsatisfying states.");
-
-        std::vector<State *> geodesic;
-        // Make sure that the manifold is traversable at least once.
-        if ((isTraversable |= discreteGeodesic(s1, s2, true, &geodesic)))
-        {
-            // Verify that geodesicInterpolate returns a constraint satisfying state.
-            if (flags & CONSTRAINED_STATESPACE_GEODESIC_INTERPOLATE &&
-                !constraint_->isSatisfied(geodesicInterpolate(geodesic, 0.5)))
-                throw Exception("Geodesic interpolate returns unsatisfying configurations.");
-
-            State *prev = nullptr;
-            for (auto s : geodesic)
+            // Verify that the provided Jacobian routine for the constraint is close
+            // to the numerical approximation.
+            if (flags & CONSTRAINED_STATESPACE_JACOBIAN)
             {
-                // Make sure geodesics contain only constraint satisfying states.
-                if (flags & CONSTRAINED_STATESPACE_GEODESIC_SATISFY)
-                    satisfyGeodesics |= !constraint_->isSatisfied(s);
+                Eigen::MatrixXd j_a(n_ - k_, n_), j_n(n_ - k_, n_);
 
-                // Make sure geodesics have some continuity.
-                if (flags & CONSTRAINED_STATESPACE_GEODESIC_CONTINUITY && prev != nullptr)
-                    continuityGeodesics |= distance(prev, s) > lambda_ * delta_;
+                constraint_->jacobian(*s1, j_a);              // Provided routine
+                constraint_->Constraint::jacobian(*s1, j_n);  // Numerical approximation
 
-                prev = s;
+                if ((j_a - j_n).norm() > constraint_->getTolerance())
+                    throw Exception("Constraint Jacobian deviates from numerical approximation.");
             }
 
-            for (auto s : geodesic)
-                freeState(s);
+            ss->sampleUniformNear(s2, s1, 10 * delta_);
+
+            // Check that samplers are returning constraint satisfying samples.
+            if (flags & CONSTRAINED_STATESPACE_SAMPLERS &&
+                (!constraint_->isSatisfied(s1) || !constraint_->isSatisfied(s2)))
+                throw Exception("State samplers generate constraint unsatisfying states.");
+
+            std::vector<State *> geodesic;
+            // Make sure that the manifold is traversable at least once.
+            if ((isTraversable |= discreteGeodesic(s1, s2, true, &geodesic)))
+            {
+                // Verify that geodesicInterpolate returns a constraint satisfying state.
+                if (flags & CONSTRAINED_STATESPACE_GEODESIC_INTERPOLATE &&
+                    !constraint_->isSatisfied(geodesicInterpolate(geodesic, 0.5)))
+                    throw Exception("Geodesic interpolate returns unsatisfying configurations.");
+
+                State *prev = nullptr;
+                for (auto s : geodesic)
+                {
+                    // Make sure geodesics contain only constraint satisfying states.
+                    if (flags & CONSTRAINED_STATESPACE_GEODESIC_SATISFY)
+                        satisfyGeodesics |= !constraint_->isSatisfied(s);
+
+                    // Make sure geodesics have some continuity.
+                    if (flags & CONSTRAINED_STATESPACE_GEODESIC_CONTINUITY && prev != nullptr)
+                        continuityGeodesics |= distance(prev, s) > lambda_ * delta_;
+
+                    prev = s;
+                }
+
+                for (auto s : geodesic)
+                    freeState(s);
+            }
+
+            if (satisfyGeodesics)
+                throw Exception("Discrete geodesic computation generates invalid states.");
+
+            if (continuityGeodesics)
+                throw Exception("Discrete geodesic computation generates non-continuous states.");
         }
 
-        if (satisfyGeodesics)
-            throw Exception("Discrete geodesic computation generates invalid states.");
-
-        if (continuityGeodesics)
-            throw Exception("Discrete geodesic computation generates non-continuous states.");
+        if (!isTraversable)
+            throw Exception("Unable to compute discrete geodesic on constraint.");
     }
-
-    freeState(s1);
-    freeState(s2);
-
-    if (!isTraversable)
-        throw Exception("Unable to compute discrete geodesic on constraint.");
+    catch (Exception e)
+    {
+        freeState(s1);
+        freeState(s2);
+        throw;
+    }
 }
 
 void ompl::base::ConstrainedStateSpace::sanityChecks() const
@@ -312,7 +320,8 @@ ompl::base::State *ompl::base::ConstrainedStateSpace::geodesicInterpolate(const 
         const double t2 = (i <= n - 2) ? d[i + 1] / last - t : 1;
 
         delete[] d;
-        assert((t1 < t2 || std::abs(t1 - t2) < std::numeric_limits<double>::epsilon())  ? (i < geodesic.size()) : (i + 1 < geodesic.size()));
+        assert((t1 < t2 || std::abs(t1 - t2) < std::numeric_limits<double>::epsilon()) ? (i < geodesic.size()) :
+                                                                                         (i + 1 < geodesic.size()));
         return (t1 < t2 || std::abs(t1 - t2) < std::numeric_limits<double>::epsilon()) ? geodesic[i] : geodesic[i + 1];
     }
 }
