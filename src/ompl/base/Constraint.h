@@ -92,8 +92,8 @@ namespace ompl
               , maxIterations_(magic::CONSTRAINT_PROJECTION_MAX_ITERATIONS)
             {
                 if (n_ <= 0 || k_ <= 0)
-                    throw ompl::Exception("ompl::base::Constraint(): "
-                                          "Ambient and manifold dimensions must be positive.");
+                    OMPL_WARN("ompl::base::Constraint(): "
+                              "Ambient and manifold dimensions must be positive.");
             }
 
             virtual ~Constraint() = default;
@@ -179,8 +179,11 @@ namespace ompl
             void setManifoldDimension(unsigned int k)
             {
                 if (k <= 0)
-                    throw ompl::Exception("ompl::base::Constraint(): "
-                                          "Space is over constrained!");
+                {
+                    k_ = 0;
+                    OMPL_WARN("ompl::base::Constraint(): "
+                              "Space is over constrained!");
+                }
                 k_ = k;
             }
 
